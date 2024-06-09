@@ -57,7 +57,6 @@ func (d *PostgresDatabase) DumpDDLs() (string, error) {
 		if err != nil {
 			return "", err
 		}
-
 		ddls = append(ddls, ddl)
 	}
 
@@ -220,11 +219,12 @@ func (d *PostgresDatabase) extensions() ([]string, error) {
 
 func (d *PostgresDatabase) types() ([]string, error) {
 	rows, err := d.db.Query(`
-		select t.typname, string_agg(e.enumlabel, ' ')
+		select n.nspname, t.typname, string_agg(e.enumlabel, ' ')
 		from pg_enum e
 		join pg_type t on e.enumtypid = t.oid
+		join pg_namespace n on t.typnamespace = n.oid
 		where not exists (select * from pg_depend d where d.objid = t.oid and d.deptype = 'e')
-		group by t.typname;
+		group by n.nspname, t.typname;
 	`)
 	if err != nil {
 		return nil, err
@@ -233,17 +233,20 @@ func (d *PostgresDatabase) types() ([]string, error) {
 
 	var ddls []string
 	for rows.Next() {
-		var typeName, labels string
-		if err := rows.Scan(&typeName, &labels); err != nil {
+		var schemaName, typeName, labels string
+		if err := rows.Scan(&schemaName, &typeName, &labels); err != nil {
 			return nil, err
 		}
 		enumLabels := []string{}
 		for _, label := range strings.Split(labels, " ") {
 			enumLabels = append(enumLabels, fmt.Sprintf("'%s'", label))
 		}
+		if d.config.TargetSchema != "" && d.config.TargetSchema != schemaName {
+			continue
+		}
 		ddls = append(
 			ddls, fmt.Sprintf(
-				"CREATE TYPE %s AS ENUM (%s);", escapeSQLName(typeName), strings.Join(enumLabels, ", "),
+				"CREATE TYPE %s AS ENUM (%s);", escapeSQLName(schemaName)+"."+escapeSQLName(typeName), strings.Join(enumLabels, ", "),
 			),
 		)
 	}
